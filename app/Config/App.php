@@ -199,4 +199,14 @@ class App extends BaseConfig
      * @see http://www.w3.org/TR/CSP/
      */
     public bool $CSPEnabled = false;
+
+    /**
+ * --------------------------------------------------------------------------
+ * Encryption Key
+ * --------------------------------------------------------------------------
+ *
+ * Used for encryption services, sessions and JWT.
+ */
+public string $encryptionKey = '';
+
 }

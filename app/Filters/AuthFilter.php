@@ -5,57 +5,62 @@ namespace App\Filters;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
-use CodeIgniter\API\ResponseTrait;
-use Config\Services; // Import the Services class
+use Config\Services;
 
 class AuthFilter implements FilterInterface
 {
-    use ResponseTrait;
-
     public function before(RequestInterface $request, $arguments = null)
     {
-        // Obtain the response instance from Services
-        $response = Services::response();
-
-        // Validar el JWT que viene en Bearer en el header
         $authHeader = $request->getHeaderLine('Authorization');
+
         if (empty($authHeader)) {
-            return $response->setStatusCode(ResponseInterface::HTTP_UNAUTHORIZED)->setJSON([
-                'status' => ResponseInterface::HTTP_UNAUTHORIZED,
-                'message' => 'You must log in to access Tripiazone.',
-            ]);
-        } else {
-            
-            // Validar el JWT
-            $parts = explode(' ', $authHeader);
-            if (count($parts) !== 2 || $parts[0] !== 'Bearer') {
-                return ['error' => 'Invalid Authorization header format'];
-            }
-    
-            // Obtener el JWT
-            $jwt = $parts[1];
-            
-            // Decodificar el JWT
-            $decoded = decodeJWT($jwt);
-           
-
-            // Verificar si hubo errores en la decodificaciÃ³n
-            if (isset($decoded['error'])) {
-                return $response->setStatusCode(ResponseInterface::HTTP_UNAUTHORIZED)->setJSON([
-                    'status' => ResponseInterface::HTTP_UNAUTHORIZED,
-                    'message' => 'You must log in to access Tripiazone.',
-                    'error' => $decoded['error']
+            return Services::response()
+                ->setStatusCode(401)
+                ->setJSON([
+                    'status'  => 401,
+                    'message' => 'Usuario no autenticado',
                 ]);
-            }
         }
-        // If you want to continue the filter logic add it here
-        // e.g. validate the JWT and set a user in session, etc.
 
-        // ...
+        $parts = explode(' ', $authHeader);
+
+        if (count($parts) !== 2 || $parts[0] !== 'Bearer' || empty($parts[1])) {
+            return Services::response()
+                ->setStatusCode(401)
+                ->setJSON([
+                    'status'  => 401,
+                    'message' => 'Token inválido (formato esperado: Bearer <token>)',
+                ]);
+        }
+
+        helper('jwt_helper');
+        $decoded = decodeJWT($parts[1]);
+
+        if (isset($decoded['error'])) {
+            return Services::response()
+                ->setStatusCode(401)
+                ->setJSON([
+                    'status'  => 401,
+                    'message' => $decoded['error'],
+                ]);
+        }
+
+        /**
+         * ✅ Forma segura y compatible en CI4:
+         * Guardamos el usuario decodificado en SERVER para leerlo luego con getServer().
+         */
+        if ($request instanceof \CodeIgniter\HTTP\IncomingRequest) {
+            $request->setGlobal('server', [
+                'auth_user' => $decoded, // aquí queda disponible
+            ]);
+        }
+
+        // Si retornas null, CI4 deja pasar la request.
+        return null;
     }
 
     public function after(RequestInterface $request, ResponseInterface $response, $arguments = null)
     {
-        //
+        // No-op
     }
 }
