@@ -1,0 +1,12 @@
+.env
+
+writable/*
+!writable/.htaccess
+
+vendor/
+node_modules/
+
+.vscode/
+*.zip
+*.log
+*.sql
