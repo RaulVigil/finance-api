@@ -16,6 +16,7 @@ class TransaccionesModel extends Model
         'fecha',
         'tipo',         // 'Ingreso' o 'Egreso'
         'monto',
+        'estado',       // 'pendiente' o 'pagado'
         'saldo_despues', 
         'descripcion',
         'categoria_id',

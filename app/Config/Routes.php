@@ -19,7 +19,14 @@ $routes->group('api', ['filter' => \App\Filters\AuthFilter::class,], function ($
   $routes->get('protegido', 'AuthController::testProtegido');
   $routes->get('test', 'AuthController::test');
   $routes->post('transacciones-crear', 'TransaccionesController::create');
-   $routes->get('transacciones-mes-actual', 'TransaccionesController::mesActual');
+  $routes->post('transacciones/(:num)/pagar', 'TransaccionesController::pagar/$1');
+  $routes->get('transacciones-mes-actual', 'TransaccionesController::mesActual');
+  $routes->get('categorias', 'TransaccionesController::categorias');
+  $routes->get('deudaslist', 'TransaccionesController::deudasList');
+  $routes->get('transacciones-todas', 'TransaccionesController::allTransacciones');
+  $routes->get('deudas-detalle', 'TransaccionesController::deudasDetalle');
+  $routes->post('deudas-crear', 'TransaccionesController::createDeuda');
+
 });
 
 $routes->get("multimedia/(:any)", 'MultimediaController::index/$0');

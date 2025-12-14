@@ -11,6 +11,7 @@ class DeudasModel extends Model
     protected $allowedFields = [
         'usuario_id',
         'nombre_deuda',
+        'tipo_deuda', //Pagar o CObrar
         'monto_total_inicial',
         'cuota_mensual',
         'saldo_pendiente', // Este es el que actualizaremos
