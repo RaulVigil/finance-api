@@ -5,9 +5,12 @@ use CodeIgniter\Router\RouteCollection;
 /**
  * @var RouteCollection $routes
  */
+// Rutas CORS
+
 $routes->get('/', 'Home::index');
 
 // Rutas públicas
+$routes->options('/(:any)', 'CorsController::cors');
 $routes->group('api', function ($routes) {
   $routes->get('testeoapi', 'Home::testeoapi');
   // $routes->get('test', 'AuthController::test');
