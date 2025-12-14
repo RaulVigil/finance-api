@@ -15,7 +15,7 @@ $routes->group('api', function ($routes) {
   $routes->get('testeoapi', 'Home::testeoapi');
   // $routes->get('test', 'AuthController::test');
   $routes->post('login', 'AuthController::login');
-  $routes->post('register', 'AuthController::register');
+  // $routes->post('register', 'AuthController::register');
 });
 
 // Rutas protegidas con JWT
