@@ -104,4 +104,56 @@ class AuthController extends BaseController
             ],
         ], 200);
     }
+
+    public function register()
+{
+    $rules = [
+        'nombre'   => 'required|min_length[3]',
+        'email'    => 'required|valid_email|is_unique[usuarios.email]',
+        'password' => 'required|min_length[6]',
+    ];
+
+    if (!$this->validate($rules)) {
+        return $this->respond([
+            'status' => 400,
+            'errors' => $this->validator->getErrors(),
+        ], 400);
+    }
+
+    $data = [
+        'nombre'           => $this->request->getVar('nombre'),
+        'email'            => $this->request->getVar('email'),
+        'contrasena'       => password_hash(
+            $this->request->getVar('password'),
+            PASSWORD_DEFAULT
+        ),
+        'saldo_actual'     => 0,
+        'tipo_usuario'     => 'Usuario',
+        'estado'           => 'Activo',
+        'esta_verificado'  => 1,
+        'fecha_creacion'   => date('Y-m-d H:i:s'),
+        'fecha_actualizacion' => date('Y-m-d H:i:s'),
+    ];
+
+    try {
+        $this->usuariosModel->insert($data);
+
+        return $this->respond([
+            'status'  => 201,
+            'message' => 'Usuario creado correctamente',
+            'data'    => [
+                'usuario_id' => $this->usuariosModel->getInsertID(),
+                'nombre'     => $data['nombre'],
+                'email'      => $data['email'],
+            ],
+        ], 201);
+
+    } catch (\Throwable $e) {
+        return $this->respond([
+            'status' => 500,
+            'message' => 'Error al crear el usuario',
+        ], 500);
+    }
+}
+
 }
