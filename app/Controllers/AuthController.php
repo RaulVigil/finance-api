@@ -21,16 +21,16 @@ class AuthController extends BaseController
         $this->usuariosModel = new UsuariosModel();
     }
 
-   public function test()
-{
-    $user = $this->request->getServer('auth_user'); // ✅ aquí está
+    public function test()
+    {
+        $user = $this->request->getServer('auth_user'); // ✅ aquí está
 
-    return $this->respond([
-        'status'  => 200,
-        'message' => 'Authorized',
-        'user'    => $user,
-    ]);
-}
+        return $this->respond([
+            'status'  => 200,
+            'message' => 'Authorized',
+            'user'    => $user,
+        ]);
+    }
 
 
 
@@ -106,54 +106,71 @@ class AuthController extends BaseController
     }
 
     public function register()
-{
-    $rules = [
-        'nombre'   => 'required|min_length[3]',
-        'email'    => 'required|valid_email|is_unique[usuarios.email]',
-        'password' => 'required|min_length[6]',
-    ];
+    {
+        $rules = [
+            'nombre'   => 'required|min_length[3]',
+            'email'    => 'required|valid_email|is_unique[usuarios.email]',
+            'password' => 'required|min_length[6]',
+        ];
 
-    if (!$this->validate($rules)) {
-        return $this->respond([
-            'status' => 400,
-            'errors' => $this->validator->getErrors(),
-        ], 400);
+        if (!$this->validate($rules)) {
+            return $this->respond([
+                'status' => 400,
+                'errors' => $this->validator->getErrors(),
+            ], 400);
+        }
+
+        $todayStart = date('Y-m-d 00:00:00');
+        $todayEnd   = date('Y-m-d 23:59:59');
+
+        $email = $this->request->getVar('email');
+
+        // Solo 1 registro por día por email
+        $alreadyRegisteredToday = $this->usuariosModel
+            ->where('email', $email)
+            ->where('fecha_creacion >=', $todayStart)
+            ->where('fecha_creacion <=', $todayEnd)
+            ->countAllResults();
+
+        if ($alreadyRegisteredToday > 0) {
+            return $this->respond([
+                'status' => 429,
+                'message' => 'Solo se permite registrar un usuario por día con este correo.',
+            ], 429);
+        }
+
+        $data = [
+            'nombre'           => $this->request->getVar('nombre'),
+            'email'            => $email,
+            'contrasena'       => password_hash(
+                $this->request->getVar('password'),
+                PASSWORD_DEFAULT
+            ),
+            'saldo_actual'     => 0,
+            'tipo_usuario'     => 'Usuario',
+            'estado'           => 'Activo',
+            'esta_verificado'  => 1,
+            'fecha_creacion'   => date('Y-m-d H:i:s'),
+            'fecha_actualizacion' => date('Y-m-d H:i:s'),
+        ];
+
+        try {
+            $this->usuariosModel->insert($data);
+
+            return $this->respond([
+                'status'  => 201,
+                'message' => 'Usuario creado correctamente',
+                'data'    => [
+                    'usuario_id' => $this->usuariosModel->getInsertID(),
+                    'nombre'     => $data['nombre'],
+                    'email'      => $data['email'],
+                ],
+            ], 201);
+        } catch (\Throwable $e) {
+            return $this->respond([
+                'status' => 500,
+                'message' => 'Error al crear el usuario',
+            ], 500);
+        }
     }
-
-    $data = [
-        'nombre'           => $this->request->getVar('nombre'),
-        'email'            => $this->request->getVar('email'),
-        'contrasena'       => password_hash(
-            $this->request->getVar('password'),
-            PASSWORD_DEFAULT
-        ),
-        'saldo_actual'     => 0,
-        'tipo_usuario'     => 'Usuario',
-        'estado'           => 'Activo',
-        'esta_verificado'  => 1,
-        'fecha_creacion'   => date('Y-m-d H:i:s'),
-        'fecha_actualizacion' => date('Y-m-d H:i:s'),
-    ];
-
-    try {
-        $this->usuariosModel->insert($data);
-
-        return $this->respond([
-            'status'  => 201,
-            'message' => 'Usuario creado correctamente',
-            'data'    => [
-                'usuario_id' => $this->usuariosModel->getInsertID(),
-                'nombre'     => $data['nombre'],
-                'email'      => $data['email'],
-            ],
-        ], 201);
-
-    } catch (\Throwable $e) {
-        return $this->respond([
-            'status' => 500,
-            'message' => 'Error al crear el usuario',
-        ], 500);
-    }
-}
-
 }
