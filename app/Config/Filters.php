@@ -99,6 +99,11 @@ class Filters extends BaseFilters
      */
     public array $methods = [
         'POST' => ['throttle'],
+        'GET'  => ['throttle'],
+        'OPTIONS' => ['throttle'],
+        'PATCH' => ['throttle'],
+        'PUT' => ['throttle'],
+        'DELETE' => ['throttle'],
     ];
 
     /**
