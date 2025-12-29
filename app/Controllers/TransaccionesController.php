@@ -235,7 +235,7 @@ class TransaccionesController extends ResourceController
     }
 
 
-// function para obtener las transacciones del mes actual
+    // function para obtener las transacciones del mes actual
     public function mesActual()
     {
         // 1. Usuario autenticado desde JWT
@@ -435,6 +435,9 @@ class TransaccionesController extends ResourceController
 
             $deudasCobrar = [];
             $deudasPagar  = [];
+            $totalCobrar = 0;
+            $totalPagar  = 0;
+
 
             // 3. Para cada deuda, traer sus transacciones
             foreach ($deudas as $deuda) {
@@ -455,6 +458,16 @@ class TransaccionesController extends ResourceController
 
                 $deuda['transacciones'] = $transacciones;
 
+
+                $saldoPendiente = (float) ($deuda['saldo_pendiente'] ?? 0);
+
+                if ($deuda['tipo_deuda'] === 'Cobrar') {
+                    $totalCobrar += $saldoPendiente;
+                } else {
+                    $totalPagar += $saldoPendiente;
+                }
+
+
                 // 4. Separar por tipo_deuda
                 if ($deuda['tipo_deuda'] === 'Cobrar') {
                     $deudasCobrar[] = $deuda;
@@ -466,6 +479,10 @@ class TransaccionesController extends ResourceController
             return $this->respond([
                 'status'  => 200,
                 'message' => 'Detalle de deudas del usuario',
+                'totales' => [
+                    'cobrar' => round($totalCobrar, 2),
+                    'pagar'  => round($totalPagar, 2),
+                ],
                 'data'    => [
                     'cobrar' => $deudasCobrar,
                     'pagar'  => $deudasPagar
