@@ -235,7 +235,7 @@ class TransaccionesController extends ResourceController
     }
 
 
-
+// function para obtener las transacciones del mes actual
     public function mesActual()
     {
         // 1. Usuario autenticado desde JWT

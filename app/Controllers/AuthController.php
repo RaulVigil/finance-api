@@ -122,10 +122,8 @@ class AuthController extends BaseController
 
         $todayStart = date('Y-m-d 00:00:00');
         $todayEnd   = date('Y-m-d 23:59:59');
-
         $email = $this->request->getVar('email');
 
-        // Solo 1 registro por día por email
         $alreadyRegisteredToday = $this->usuariosModel
             ->where('email', $email)
             ->where('fecha_creacion >=', $todayStart)
@@ -156,14 +154,31 @@ class AuthController extends BaseController
 
         try {
             $this->usuariosModel->insert($data);
+            $usuarioId = $this->usuariosModel->getInsertID();
+
+            // Generar JWT igual que en login
+            helper('jwt_helper');
+
+            $payload = [
+                'usuario_id'   => $usuarioId,
+                'email'        => $data['email'],
+                'nombre'       => $data['nombre'],
+                'tipo_usuario' => $data['tipo_usuario'],
+                'saldo_actual' => $data['saldo_actual'],
+            ];
+
+            $token = createJWT($payload);
 
             return $this->respond([
                 'status'  => 201,
-                'message' => 'Usuario creado correctamente',
-                'data'    => [
-                    'usuario_id' => $this->usuariosModel->getInsertID(),
-                    'nombre'     => $data['nombre'],
-                    'email'      => $data['email'],
+                'message' => 'Usuario creado y autenticado correctamente',
+                'data' => [
+                    'usuario_id'   => $usuarioId,
+                    'nombre'       => $data['nombre'],
+                    'email'        => $data['email'],
+                    'tipo_usuario' => $data['tipo_usuario'],
+                    'saldo_actual' => $data['saldo_actual'],
+                    'token'        => $token,
                 ],
             ], 201);
         } catch (\Throwable $e) {
