@@ -288,6 +288,25 @@ class TransaccionesController extends ResourceController
             ->select('saldo_actual')
             ->find($usuarioId)['saldo_actual'] ?? 0;
 
+        // Historico de totales ingresos y egresos
+        $totales = $this->transaccionesModel
+            ->select('tipo, COUNT(*) as total')
+            ->where('usuario_id', $usuarioId)
+            ->groupBy('tipo')
+            ->findAll();
+
+        $totalIngresos = 0;
+        $totalEgresos  = 0;
+
+        foreach ($totales as $row) {
+            if ($row['tipo'] === 'Ingreso') {
+                $totalIngresos = (int) $row['total'];
+            } else {
+                $totalEgresos = (int) $row['total'];
+            }
+        }
+
+
 
         return $this->respond([
             'status'  => 200,
@@ -296,8 +315,8 @@ class TransaccionesController extends ResourceController
             'anio'    => date('Y'),
             'saldo_actual' => (float) $saldoActual,
             'totales' => [
-                'ingresos' => count($ingresos),
-                'egresos'  => count($egresos),
+                'ingresos' => $totalIngresos,
+                'egresos'  => $totalEgresos,
             ],
             'data' => [
                 'ingresos' => $ingresos,
