@@ -395,7 +395,7 @@ class TransaccionesController extends ResourceController
 
         $usuarioId = $authUser['usuario_id'];
 
-        // 2. Obtener todas las transacciones del usuario
+        // 2. Todas las transacciones
         $transacciones = $this->transaccionesModel
             ->select('
             transacciones.transaccion_id,
@@ -413,7 +413,7 @@ class TransaccionesController extends ResourceController
             ->orderBy('transacciones.fecha', 'DESC')
             ->findAll();
 
-        // 3. Separar ingresos y egresos
+        // 3. Separar ingresos y egresos (LISTADO)
         $ingresos = [];
         $egresos  = [];
 
@@ -425,7 +425,32 @@ class TransaccionesController extends ResourceController
             }
         }
 
-        // 4. Saldo actual del usuario
+        // 4. Totales por CANTIDAD (se mantiene)
+        $totalIngresosCount = count($ingresos);
+        $totalEgresosCount  = count($egresos);
+
+        // 5. Totales por MONTO (solo pagados)
+        $totalesMonto = $this->transaccionesModel
+            ->select('tipo, SUM(monto) as total')
+            ->where('usuario_id', $usuarioId)
+            ->where('estado', 'pagado')
+            ->groupBy('tipo')
+            ->findAll();
+
+        $totalIngresosMonto = 0;
+        $totalEgresosMonto  = 0;
+
+        foreach ($totalesMonto as $row) {
+            if ($row['tipo'] === 'Ingreso') {
+                $totalIngresosMonto = (float) $row['total'];
+            }
+
+            if ($row['tipo'] === 'Egreso') {
+                $totalEgresosMonto = (float) $row['total'];
+            }
+        }
+
+        // 6. Saldo actual
         $saldoActual = $this->usuariosModel
             ->select('saldo_actual')
             ->find($usuarioId)['saldo_actual'] ?? 0;
@@ -434,16 +459,21 @@ class TransaccionesController extends ResourceController
             'status'  => 200,
             'message' => 'Todas las transacciones del usuario',
             'saldo_actual' => (float) $saldoActual,
+
             'totales' => [
-                'ingresos' => count($ingresos),
-                'egresos'  => count($egresos),
+                'ingresos'        => $totalIngresosCount,
+                'egresos'         => $totalEgresosCount,
+                'ingresos_monto' => round($totalIngresosMonto, 2),
+                'egresos_monto'  => round($totalEgresosMonto, 2),
             ],
+
             'data' => [
                 'ingresos' => $ingresos,
                 'egresos'  => $egresos,
             ]
         ]);
     }
+
 
     public function deudasDetalle()
     {
