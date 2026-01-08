@@ -247,11 +247,11 @@ class TransaccionesController extends ResourceController
 
         $usuarioId = $authUser['usuario_id'];
 
-        // 2. Rango de fechas del mes actual
+        // 2. Rango del mes actual
         $inicioMes = date('Y-m-01');
         $finMes    = date('Y-m-t');
 
-        // 3. Obtener todas las transacciones del mes
+        // 3. Transacciones del mes actual
         $transacciones = $this->transaccionesModel
             ->select('
             transacciones.transaccion_id,
@@ -271,7 +271,7 @@ class TransaccionesController extends ResourceController
             ->orderBy('transacciones.fecha', 'DESC')
             ->findAll();
 
-        // 4. Separar ingresos y egresos
+        // 4. Separar ingresos y egresos del mes
         $ingresos = [];
         $egresos  = [];
 
@@ -283,30 +283,36 @@ class TransaccionesController extends ResourceController
             }
         }
 
-        // Obtener saldo actual del usuario
-        $saldoActual = $this->usuariosModel
-            ->select('saldo_actual')
-            ->find($usuarioId)['saldo_actual'] ?? 0;
-
-        // Historico de totales ingresos y egresos
-        $totales = $this->transaccionesModel
-            ->select('tipo, COUNT(*) as total')
+        // 5. Totales POR MONTO del mes (solo pagados)
+        $totalesMes = $this->transaccionesModel
+            ->select('
+            tipo,
+            SUM(monto) as total
+        ')
             ->where('usuario_id', $usuarioId)
+            ->where('estado', 'pagado')
+            ->where('fecha >=', $inicioMes)
+            ->where('fecha <=', $finMes)
             ->groupBy('tipo')
             ->findAll();
 
-        $totalIngresos = 0;
-        $totalEgresos  = 0;
+        $totalIngresosMes = 0;
+        $totalEgresosMes  = 0;
 
-        foreach ($totales as $row) {
+        foreach ($totalesMes as $row) {
             if ($row['tipo'] === 'Ingreso') {
-                $totalIngresos = (int) $row['total'];
-            } else {
-                $totalEgresos = (int) $row['total'];
+                $totalIngresosMes = (float) $row['total'];
+            }
+
+            if ($row['tipo'] === 'Egreso') {
+                $totalEgresosMes = (float) $row['total'];
             }
         }
 
-
+        // 6. Saldo actual
+        $saldoActual = $this->usuariosModel
+            ->select('saldo_actual')
+            ->find($usuarioId)['saldo_actual'] ?? 0;
 
         return $this->respond([
             'status'  => 200,
@@ -314,16 +320,21 @@ class TransaccionesController extends ResourceController
             'mes'     => date('m'),
             'anio'    => date('Y'),
             'saldo_actual' => (float) $saldoActual,
+
+            // TOTALES 
             'totales' => [
-                'ingresos' => $totalIngresos,
-                'egresos'  => $totalEgresos,
+                'ingresos_mes' => round($totalIngresosMes, 2),
+                'egresos_mes'  => round($totalEgresosMes, 2),
             ],
+
+            // DATA SOLO PARA LISTADO
             'data' => [
                 'ingresos' => $ingresos,
                 'egresos'  => $egresos,
             ]
         ]);
     }
+
 
 
     public function categorias()
