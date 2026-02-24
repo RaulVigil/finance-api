@@ -369,7 +369,8 @@ class TransaccionesController extends ResourceController
 
         try {
             $deudas = $this->deudasModel
-                ->select('deuda_id, nombre_deuda, tipo_deuda')
+               
+                ->select('deuda_id, nombre_deuda, tipo_deuda, estado, monto_total_inicial, saldo_pendiente')
                 ->where('usuario_id', $usuarioId)
                 ->orderBy('nombre_deuda', 'ASC')
                 ->findAll();
