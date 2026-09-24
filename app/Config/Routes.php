@@ -30,7 +30,7 @@ $routes->group('api', ['filter' => \App\Filters\AuthFilter::class,], function ($
   $routes->get('transacciones-todas', 'TransaccionesController::allTransacciones');
   $routes->get('deudas-detalle', 'TransaccionesController::deudasDetalle');
   $routes->post('deudas-crear', 'TransaccionesController::createDeuda');
-
+  $routes->get('datos-graficas', 'TransaccionesController::getDatosGraficas');
 });
 
 $routes->get("multimedia/(:any)", 'MultimediaController::index/$0');

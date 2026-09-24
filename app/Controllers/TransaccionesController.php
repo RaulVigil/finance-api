@@ -369,8 +369,7 @@ class TransaccionesController extends ResourceController
 
         try {
             $deudas = $this->deudasModel
-               
-                ->select('deuda_id, nombre_deuda, tipo_deuda, estado, monto_total_inicial, saldo_pendiente')
+                ->select('deuda_id, nombre_deuda, tipo_deuda, estado, monto_total_inicial, saldo_pendiente, cuota_mensual')
                 ->where('usuario_id', $usuarioId)
                 ->orderBy('nombre_deuda', 'ASC')
                 ->findAll();
@@ -611,6 +610,115 @@ class TransaccionesController extends ResourceController
                 'status'  => 201,
                 'message' => 'Deuda creada correctamente'
             ]);
+        } catch (\Exception $e) {
+            return $this->failServerError($e->getMessage());
+        }
+    }
+
+
+
+    // Función para obtener los datos estadísticos para las gráficas del Home
+    public function getDatosGraficas()
+    {
+        // 1. Usuario autenticado desde JWT
+        $authUser = $this->request->getServer('auth_user');
+
+        if (!$authUser || !isset($authUser['usuario_id'])) {
+            return $this->failUnauthorized('Usuario no autenticado');
+        }
+
+        $usuarioId = $authUser['usuario_id'];
+
+        try {
+            /* ========================================================
+               GRÁFICA 1: DONA (Egresos del mes actual por categoría)
+               ======================================================== */
+            $inicioMes = date('Y-m-01');
+            $finMes    = date('Y-m-t');
+
+            $gastosPorCategoria = $this->transaccionesModel
+                ->select('categorias.nombre as nombre, SUM(transacciones.monto) as valor')
+                ->join('categorias', 'categorias.categoria_id = transacciones.categoria_id', 'left')
+                ->where('transacciones.usuario_id', $usuarioId)
+                ->where('transacciones.tipo', 'Egreso')
+                ->where('transacciones.estado', 'pagado')
+                ->where('transacciones.fecha >=', $inicioMes)
+                ->where('transacciones.fecha <=', $finMes)
+                ->groupBy('categorias.categoria_id')
+                ->orderBy('valor', 'DESC')
+                ->findAll();
+
+            // Convertir 'valor' a flotante para que React/Recharts lo lea bien numéricamente
+            foreach ($gastosPorCategoria as &$gasto) {
+                $gasto['valor'] = (float) $gasto['valor'];
+                // Si la categoría viene nula, ponerle 'Sin categoría'
+                if (!$gasto['nombre']) {
+                    $gasto['nombre'] = 'Otros';
+                }
+            }
+
+            /* ========================================================
+               GRÁFICA 2: BARRAS (Flujo de caja últimos 6 meses)
+               ======================================================== */
+            // Calculamos la fecha de hace 5 meses exactos (para tener 6 meses contando el actual)
+            $seisMesesAtras = date('Y-m-01', strtotime('-5 months'));
+            $mesActualUltimoDia = date('Y-m-t');
+
+            $transaccionesHistoricas = $this->transaccionesModel
+                ->select('fecha, tipo, monto')
+                ->where('usuario_id', $usuarioId)
+                ->where('estado', 'pagado')
+                ->where('fecha >=', $seisMesesAtras)
+                ->where('fecha <=', $mesActualUltimoDia)
+                ->findAll();
+
+            // Inicializar array de 6 meses (ej: ["Sep", "Oct", "Nov", "Dic", "Ene", "Feb"])
+            $flujoCaja = [];
+            $mesesNombres = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+            // Crear el esqueleto de los últimos 6 meses para que salgan en orden aunque no haya datos
+            for ($i = 5; $i >= 0; $i--) {
+                $timestampMes = strtotime("-$i months");
+                $numeroMes = date('n', $timestampMes) - 1; // 0-11
+                $nombreMes = $mesesNombres[$numeroMes];
+                $claveMesAnio = date('Y-m', $timestampMes);
+
+                $flujoCaja[$claveMesAnio] = [
+                    'name' => $nombreMes,
+                    'ingresos' => 0,
+                    'egresos' => 0
+                ];
+            }
+
+            // Rellenar los datos históricos
+            foreach ($transaccionesHistoricas as $t) {
+                $claveMesAnio = date('Y-m', strtotime($t['fecha']));
+                
+                // Si la fecha cae dentro de nuestros 6 meses, sumamos
+                if (isset($flujoCaja[$claveMesAnio])) {
+                    if ($t['tipo'] === 'Ingreso') {
+                        $flujoCaja[$claveMesAnio]['ingresos'] += (float) $t['monto'];
+                    } else {
+                        $flujoCaja[$claveMesAnio]['egresos'] += (float) $t['monto'];
+                    }
+                }
+            }
+
+            // Quitar las llaves 'Y-m' para que React reciba un array plano
+            $flujoCajaList = array_values($flujoCaja);
+
+            /* ========================================================
+               RETORNO DE RESPUESTA
+               ======================================================== */
+            return $this->respond([
+                'status'  => 200,
+                'message' => 'Datos para gráficas obtenidos correctamente',
+                'data'    => [
+                    'gastosCategoria' => $gastosPorCategoria,
+                    'flujoCaja'       => $flujoCajaList
+                ]
+            ]);
+
         } catch (\Exception $e) {
             return $this->failServerError($e->getMessage());
         }
