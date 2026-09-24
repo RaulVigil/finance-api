@@ -21,7 +21,8 @@ class TransaccionesModel extends Model
         'descripcion',
         'categoria_id',
         'deuda_id',     // Puede ser null
-        'presupuesto_estimado'
+        'presupuesto_estimado',
+        'tarjeta_id',   // Puede ser null — identifica gasto con tarjeta de crédito
     ];
     
 }

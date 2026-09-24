@@ -17,6 +17,7 @@ class DeudasModel extends Model
         'saldo_pendiente', // Este es el que actualizaremos
         'fecha_inicio',
         'fecha_vencimiento',
-        'estado'
+        'estado',
+        'tarjeta_id',
     ];
 }
