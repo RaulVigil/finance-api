@@ -8,6 +8,7 @@ use App\Models\TarjetasCreditoModel;
 use App\Models\TransaccionesModel;
 use App\Models\UsuariosModel;
 use App\Models\DeudasModel;
+use App\Models\GastosPendientesModel;
 
 class TarjetasController extends ResourceController
 {
@@ -17,6 +18,7 @@ class TarjetasController extends ResourceController
     protected $transaccionesModel;
     protected $usuariosModel;
     protected $deudasModel;
+    protected $pendientesModel;
     protected $db;
 
     public function __construct()
@@ -25,6 +27,7 @@ class TarjetasController extends ResourceController
         $this->transaccionesModel = new TransaccionesModel();
         $this->usuariosModel      = new UsuariosModel();
         $this->deudasModel        = new DeudasModel();
+        $this->pendientesModel    = new GastosPendientesModel();
         $this->db                 = \Config\Database::connect();
     }
 
@@ -172,13 +175,21 @@ class TarjetasController extends ResourceController
                     'categoria'      => $tx['categoria'],
                 ];
             }, $rawTransacciones);
+            // Gastos pendientes asociados a esta tarjeta (consumos normales por reponer)
+            $gastosPendientes = $this->pendientesModel
+                ->where('tarjeta_id', $tarjetaId)
+                ->where('usuario_id', $usuarioId)
+                ->orderBy('anio', 'DESC')
+                ->orderBy('mes', 'DESC')
+                ->findAll();
 
             return $this->respond([
-                'status'        => 200,
-                'message'       => 'Detalle de tarjeta',
-                'tarjeta'       => $tarjeta,
-                'transacciones' => $transacciones,
-                'deudas_cuotas' => $deudas,
+                'status'            => 200,
+                'message'           => 'Detalle de tarjeta',
+                'tarjeta'           => $tarjeta,
+                'transacciones'     => $transacciones,
+                'deudas_cuotas'     => $deudas,
+                'gastos_pendientes' => $gastosPendientes,
             ]);
         } catch (\Exception $e) {
             return $this->failServerError($e->getMessage());
@@ -190,6 +201,7 @@ class TarjetasController extends ResourceController
      * Registrar un gasto con la tarjeta de crédito.
      * - Reduce saldo_disponible / Aumenta saldo_utilizado de la tarjeta
      * - Crea una transacción Egreso identificada con tarjeta_id
+     * - Opcionalmente crea un gasto pendiente mensual (recordatorio de reponer)
      * - NO descuenta del saldo_actual (es crédito)
      */
     public function registrarGasto($tarjetaId)
@@ -252,6 +264,36 @@ class TarjetasController extends ResourceController
                 'deuda_id'      => null,
                 'tarjeta_id'    => (int) $tarjetaId,
             ]);
+
+            // Crear gasto pendiente mensual (recordatorio de reponer) si se solicita
+            $reponerGasto = isset($json->reponer_gasto) ? (bool) $json->reponer_gasto : true;
+            if ($reponerGasto) {
+                $diaCorte  = (int) ($tarjeta['dia_corte'] ?? 0);
+                $hoy       = new \DateTime();
+                $diaHoy    = (int) $hoy->format('j');
+                $mes       = (int) $hoy->format('n');
+                $anio      = (int) $hoy->format('Y');
+
+                // Si ya pasó el día de corte, el gasto aplica al siguiente período
+                if ($diaCorte > 0 && $diaHoy >= $diaCorte) {
+                    $mes++;
+                    if ($mes > 12) { $mes = 1; $anio++; }
+                }
+
+                $this->pendientesModel->insert([
+                    'usuario_id'   => $usuarioId,
+                    'plantilla_id' => null,
+                    'deuda_id'     => null,
+                    'tarjeta_id'   => (int) $tarjetaId,
+                    'nombre'       => $json->descripcion ?? 'Compra con tarjeta de crédito',
+                    'descripcion'  => $json->descripcion ?? null,
+                    'categoria_id' => $json->categoria_id,
+                    'monto'        => $monto,
+                    'mes'          => $mes,
+                    'anio'         => $anio,
+                    'estado'       => 'pendiente',
+                ]);
+            }
 
             $this->db->transComplete();
 
@@ -330,9 +372,54 @@ class TarjetasController extends ResourceController
             // Actualizar saldo_actual del usuario
             $this->usuariosModel->update($usuarioId, ['saldo_actual' => $nuevoSaldo]);
 
-            // Crear transacción Egreso en cuenta corriente
+            // ── Gestión inteligente de amortización de plan/deuda vinculada ──
+            $deudaId = !empty($json->deuda_id) ? (int) $json->deuda_id : null;
+
+            // Si no se especificó deuda_id explícito, verificar si la tarjeta tiene planes a cuotas activos
+            if (!$deudaId) {
+                $planesActivos = $this->deudasModel
+                    ->where('tarjeta_id', $tarjetaId)
+                    ->where('usuario_id', $usuarioId)
+                    ->where('estado', 'Activa')
+                    ->where('saldo_pendiente >', 0)
+                    ->findAll();
+
+                // Si hay exactamente un plan activo con saldo pendiente, vincular y amortizar automáticamente
+                if (count($planesActivos) === 1) {
+                    $deudaId = (int) $planesActivos[0]['deuda_id'];
+                } elseif (count($planesActivos) > 1 && $nuevoUtilizado <= 0) {
+                    // Si se pagó todo el saldo de la tarjeta a 0, liquidar todos los planes activos
+                    foreach ($planesActivos as $pa) {
+                        $this->deudasModel->update($pa['deuda_id'], [
+                            'saldo_pendiente' => 0.00,
+                            'estado'          => 'Pagada',
+                        ]);
+                    }
+                }
+            }
+
+            $deuda = null;
+            if ($deudaId) {
+                $deuda = $this->deudasModel->find($deudaId);
+                if ($deuda && $deuda['usuario_id'] == $usuarioId) {
+                    $nuevoSaldoDeuda = max(0, (float) $deuda['saldo_pendiente'] - $montoPago);
+                    $estadoDeuda = ($nuevoSaldoDeuda <= 0) ? 'Pagada' : 'Activa';
+
+                    $this->deudasModel->update($deudaId, [
+                        'saldo_pendiente' => $nuevoSaldoDeuda,
+                        'estado'          => $estadoDeuda,
+                    ]);
+                } else {
+                    $deuda = null;
+                    $deudaId = null;
+                }
+            }
+
+            // Crear transacción Egreso en cuenta corriente vinculada a la tarjeta y deuda
             $descripcion = 'Pago tarjeta: ' . $tarjeta['nombre'];
-            if ($json->descripcion ?? '') {
+            if ($deuda) {
+                $descripcion .= ' — ' . $deuda['nombre_deuda'];
+            } elseif (!empty($json->descripcion)) {
                 $descripcion .= ' — ' . $json->descripcion;
             }
 
@@ -345,9 +432,32 @@ class TarjetasController extends ResourceController
                 'saldo_despues' => $nuevoSaldo,
                 'descripcion'   => $descripcion,
                 'categoria_id'  => $json->categoria_id ?? 12, // "Pago de Deudas" por defecto
-                'deuda_id'      => null,
-                'tarjeta_id'    => null, // No linkeamos al pago en sí
+                'deuda_id'      => $deudaId,
+                'tarjeta_id'    => (int) $tarjetaId, // Linkeamos a la tarjeta para que conste en sus movimientos
             ]);
+
+            $transaccionId = $this->transaccionesModel->getInsertID();
+
+            // Si hay un gasto mensual pendiente para este plan/deuda, marcarlo como pagado
+            if ($deudaId && $this->pendientesModel) {
+                $mesActual  = (int) date('n');
+                $anioActual = (int) date('Y');
+                $gastoPendiente = $this->pendientesModel
+                    ->where('usuario_id', $usuarioId)
+                    ->where('deuda_id', $deudaId)
+                    ->where('mes', $mesActual)
+                    ->where('anio', $anioActual)
+                    ->where('estado', 'pendiente')
+                    ->first();
+
+                if ($gastoPendiente) {
+                    $this->pendientesModel->update($gastoPendiente['gasto_id'], [
+                        'estado'         => 'pagado',
+                        'fecha_pago'     => date('Y-m-d'),
+                        'transaccion_id' => $transaccionId,
+                    ]);
+                }
+            }
 
             $this->db->transComplete();
 
@@ -361,6 +471,12 @@ class TarjetasController extends ResourceController
                 'nuevo_saldo_usuario' => $nuevoSaldo,
                 'saldo_disponible'    => $nuevoDisponible,
                 'saldo_utilizado'     => $nuevoUtilizado,
+                'deuda_actualizada'   => $deuda ? [
+                    'deuda_id'        => $deudaId,
+                    'nombre_deuda'    => $deuda['nombre_deuda'],
+                    'saldo_pendiente' => $nuevoSaldoDeuda ?? 0,
+                    'estado'          => $estadoDeuda ?? 'Pagada',
+                ] : null,
             ]);
         } catch (\Exception $e) {
             $this->db->transRollback();
@@ -498,4 +614,35 @@ class TarjetasController extends ResourceController
             return $this->failServerError($e->getMessage());
         }
     }
+
+    /** DELETE /api/tarjetas/{id} — Eliminar tarjeta */
+    public function eliminar($tarjetaId)
+    {
+        $authUser = $this->request->getServer('auth_user');
+        if (!$authUser || !isset($authUser['usuario_id'])) {
+            return $this->failUnauthorized('Usuario no autenticado');
+        }
+
+        $usuarioId = $authUser['usuario_id'];
+        $tarjeta   = $this->tarjetasModel->find($tarjetaId);
+
+        if (!$tarjeta || $tarjeta['usuario_id'] != $usuarioId) {
+            return $this->failNotFound('Tarjeta no encontrada');
+        }
+
+        if ((float) $tarjeta['saldo_utilizado'] > 0) {
+            return $this->failValidationErrors('No puedes eliminar una tarjeta con saldo pendiente de pago ($' . number_format($tarjeta['saldo_utilizado'], 2) . '). Primero realiza el pago.');
+        }
+
+        try {
+            $this->tarjetasModel->delete($tarjetaId);
+            return $this->respondDeleted([
+                'status'  => 200,
+                'message' => 'Tarjeta eliminada correctamente',
+            ]);
+        } catch (\Exception $e) {
+            return $this->failServerError($e->getMessage());
+        }
+    }
 }
+

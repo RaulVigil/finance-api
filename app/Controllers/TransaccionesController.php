@@ -8,6 +8,7 @@ use App\Models\TransaccionesModel;
 use App\Models\UsuariosModel;
 use App\Models\DeudasModel;
 use App\Models\CategoriasModel;
+use App\Models\TarjetasCreditoModel;
 
 class TransaccionesController extends ResourceController
 {
@@ -17,6 +18,7 @@ class TransaccionesController extends ResourceController
     protected $usuariosModel;
     protected $deudasModel;
     protected $categoriasModel;
+    protected $tarjetasModel;
     protected $db;
 
     public function __construct()
@@ -25,6 +27,7 @@ class TransaccionesController extends ResourceController
         $this->usuariosModel      = new UsuariosModel();
         $this->deudasModel        = new DeudasModel();
         $this->categoriasModel    = new CategoriasModel();
+        $this->tarjetasModel      = new TarjetasCreditoModel();
         $this->db                 = \Config\Database::connect();
     }
 
@@ -32,15 +35,16 @@ class TransaccionesController extends ResourceController
     public function create()
     {
         $json = $this->request->getJSON();
+        $authUser = $this->request->getServer('auth_user');
+        $usuarioId = !empty($json->usuario_id) ? (int) $json->usuario_id : ($authUser['usuario_id'] ?? null);
 
         // Validar datos mínimos
-        if (!isset($json->usuario_id, $json->tipo, $json->monto, $json->categoria_id)) {
+        if (!$usuarioId || !isset($json->tipo, $json->monto, $json->categoria_id)) {
             return $this->failValidationErrors(
                 'Faltan datos requeridos: usuario_id, tipo, monto, categoria_id'
             );
         }
 
-        $usuarioId = $json->usuario_id;
         $monto     = (float) $json->monto;
         $tipo      = $json->tipo; // Ingreso | Egreso
         $estado    = $json->estado ?? 'pendiente';
@@ -101,6 +105,7 @@ class TransaccionesController extends ResourceController
                 'descripcion'   => $json->descripcion ?? '',
                 'categoria_id'  => $json->categoria_id,
                 'deuda_id'      => $json->deuda_id ?? null,
+                'tarjeta_id'    => !empty($deuda['tarjeta_id']) ? (int) $deuda['tarjeta_id'] : null,
             ];
 
             $this->transaccionesModel->insert($dataTransaccion);
@@ -117,6 +122,18 @@ class TransaccionesController extends ResourceController
 
                 if ($deuda['tipo_deuda'] === 'Pagar') {
                     $nuevoSaldoDeuda = (float) $deuda['saldo_pendiente'] - $monto;
+                    // Si la deuda pertenece a una tarjeta de crédito, reponer cupo en la tarjeta
+                    if (!empty($deuda['tarjeta_id'])) {
+                        $tc = $this->tarjetasModel->find($deuda['tarjeta_id']);
+                        if ($tc) {
+                            $tcUtilizado  = max(0, (float) $tc['saldo_utilizado'] - $monto);
+                            $tcDisponible = min((float) $tc['limite_credito'], (float) $tc['saldo_disponible'] + $monto);
+                            $this->tarjetasModel->update($deuda['tarjeta_id'], [
+                                'saldo_disponible' => $tcDisponible,
+                                'saldo_utilizado'  => $tcUtilizado,
+                            ]);
+                        }
+                    }
                 } else {
                     // Cobrar → me deben menos
                     $nuevoSaldoDeuda = (float) $deuda['saldo_pendiente'] - $monto;
@@ -214,6 +231,19 @@ class TransaccionesController extends ResourceController
                         'saldo_pendiente' => $nuevoSaldoDeuda,
                         'estado'          => $estadoDeuda
                     ]);
+
+                    // Si la deuda pertenece a una tarjeta de crédito, reponer cupo en la tarjeta
+                    if (!empty($deuda['tarjeta_id'])) {
+                        $tc = $this->tarjetasModel->find($deuda['tarjeta_id']);
+                        if ($tc) {
+                            $tcUtilizado  = max(0, (float) $tc['saldo_utilizado'] - $monto);
+                            $tcDisponible = min((float) $tc['limite_credito'], (float) $tc['saldo_disponible'] + $monto);
+                            $this->tarjetasModel->update($deuda['tarjeta_id'], [
+                                'saldo_disponible' => $tcDisponible,
+                                'saldo_utilizado'  => $tcUtilizado,
+                            ]);
+                        }
+                    }
                 }
             }
 
@@ -309,6 +339,43 @@ class TransaccionesController extends ResourceController
             }
         }
 
+        // Totales del mes anterior (para comparativa inteligente de finanzas)
+        $inicioMesAnterior = date('Y-m-01', strtotime('first day of last month'));
+        $finMesAnterior    = date('Y-m-t', strtotime('last day of last month'));
+
+        $totalesMesAnterior = $this->transaccionesModel
+            ->select('tipo, SUM(monto) as total')
+            ->where('usuario_id', $usuarioId)
+            ->where('estado', 'pagado')
+            ->where('fecha >=', $inicioMesAnterior)
+            ->where('fecha <=', $finMesAnterior)
+            ->groupBy('tipo')
+            ->findAll();
+
+        $totalIngresosMesAnterior = 0;
+        $totalEgresosMesAnterior  = 0;
+
+        foreach ($totalesMesAnterior as $row) {
+            if ($row['tipo'] === 'Ingreso') {
+                $totalIngresosMesAnterior = (float) $row['total'];
+            }
+
+            if ($row['tipo'] === 'Egreso') {
+                $totalEgresosMesAnterior = (float) $row['total'];
+            }
+        }
+
+        $diferenciaEgresos = $totalEgresosMes - $totalEgresosMesAnterior;
+        $porcentajeEgresos = ($totalEgresosMesAnterior > 0)
+            ? round((($totalEgresosMes - $totalEgresosMesAnterior) / $totalEgresosMesAnterior) * 100, 1)
+            : ($totalEgresosMes > 0 ? 100 : 0);
+
+        $netoMesActual = $totalIngresosMes - $totalEgresosMes;
+        $netoMesAnterior = $totalIngresosMesAnterior - $totalEgresosMesAnterior;
+        $porcentajeAhorro = ($netoMesAnterior != 0)
+            ? round((($netoMesActual - $netoMesAnterior) / abs($netoMesAnterior)) * 100, 1)
+            : ($netoMesActual > 0 ? 100 : 0);
+
         // 6. Saldo actual
         $saldoActual = $this->usuariosModel
             ->select('saldo_actual')
@@ -325,6 +392,18 @@ class TransaccionesController extends ResourceController
             'totales' => [
                 'ingresos_mes' => round($totalIngresosMes, 2),
                 'egresos_mes'  => round($totalEgresosMes, 2),
+            ],
+
+            // COMPARATIVA CON EL MES ANTERIOR
+            'comparativa' => [
+                'ingresos_mes_anterior' => round($totalIngresosMesAnterior, 2),
+                'egresos_mes_anterior'  => round($totalEgresosMesAnterior, 2),
+                'diferencia_egresos'    => round($diferenciaEgresos, 2),
+                'porcentaje_egresos'    => $porcentajeEgresos,
+                'neto_mes_actual'       => round($netoMesActual, 2),
+                'neto_mes_anterior'     => round($netoMesAnterior, 2),
+                'porcentaje_ahorro'     => $porcentajeAhorro,
+                'tiene_datos_mes_anterior' => ($totalIngresosMesAnterior > 0 || $totalEgresosMesAnterior > 0),
             ],
 
             // DATA SOLO PARA LISTADO
@@ -614,6 +693,64 @@ class TransaccionesController extends ResourceController
             return $this->failServerError($e->getMessage());
         }
     }
+
+    public function actualizarDeuda($deudaId)
+    {
+        $authUser = $this->request->getServer('auth_user');
+        if (!$authUser || !isset($authUser['usuario_id'])) {
+            return $this->failUnauthorized('Usuario no autenticado');
+        }
+
+        $usuarioId = $authUser['usuario_id'];
+        $deuda = $this->deudasModel->find($deudaId);
+
+        if (!$deuda || $deuda['usuario_id'] != $usuarioId) {
+            return $this->failNotFound('Deuda no encontrada');
+        }
+
+        $json = $this->request->getJSON();
+        $data = [];
+        if (isset($json->nombre_deuda))      $data['nombre_deuda']      = $json->nombre_deuda;
+        if (isset($json->cuota_mensual))     $data['cuota_mensual']     = (float) $json->cuota_mensual;
+        if (isset($json->fecha_vencimiento)) $data['fecha_vencimiento'] = $json->fecha_vencimiento;
+        if (isset($json->estado))            $data['estado']            = $json->estado;
+
+        try {
+            $this->deudasModel->update($deudaId, $data);
+            return $this->respond([
+                'status'  => 200,
+                'message' => 'Deuda actualizada correctamente',
+            ]);
+        } catch (\Exception $e) {
+            return $this->failServerError($e->getMessage());
+        }
+    }
+
+    public function eliminarDeuda($deudaId)
+    {
+        $authUser = $this->request->getServer('auth_user');
+        if (!$authUser || !isset($authUser['usuario_id'])) {
+            return $this->failUnauthorized('Usuario no autenticado');
+        }
+
+        $usuarioId = $authUser['usuario_id'];
+        $deuda = $this->deudasModel->find($deudaId);
+
+        if (!$deuda || $deuda['usuario_id'] != $usuarioId) {
+            return $this->failNotFound('Deuda no encontrada');
+        }
+
+        try {
+            $this->deudasModel->delete($deudaId);
+            return $this->respondDeleted([
+                'status'  => 200,
+                'message' => 'Deuda eliminada correctamente',
+            ]);
+        } catch (\Exception $e) {
+            return $this->failServerError($e->getMessage());
+        }
+    }
+
 
 
 

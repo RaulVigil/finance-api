@@ -57,13 +57,17 @@ class GastosFijosController extends ResourceController
                           gastos_fijos_plantillas.activa,
                           gastos_fijos_plantillas.categoria_id,
                           gastos_fijos_plantillas.deuda_id,
+                          gastos_fijos_plantillas.tarjeta_id,
                           categorias.nombre AS categoria,
                           deudas.nombre_deuda,
                           deudas.cuota_mensual,
                           deudas.saldo_pendiente,
-                          deudas.estado AS estado_deuda')
+                          deudas.estado AS estado_deuda,
+                          COALESCE(tarjetas_directas.nombre, tarjetas_credito.nombre) AS tarjeta_nombre')
                 ->join('categorias', 'categorias.categoria_id = gastos_fijos_plantillas.categoria_id', 'left')
                 ->join('deudas', 'deudas.deuda_id = gastos_fijos_plantillas.deuda_id', 'left')
+                ->join('tarjetas_credito AS tarjetas_directas', 'tarjetas_directas.tarjeta_id = gastos_fijos_plantillas.tarjeta_id', 'left')
+                ->join('tarjetas_credito', 'tarjetas_credito.tarjeta_id = deudas.tarjeta_id', 'left')
                 ->where('gastos_fijos_plantillas.usuario_id', $usuarioId)
                 ->orderBy('gastos_fijos_plantillas.nombre', 'ASC')
                 ->findAll();
@@ -100,6 +104,7 @@ class GastosFijosController extends ResourceController
                 'descripcion'    => $json->descripcion ?? null,
                 'categoria_id'   => $json->categoria_id,
                 'deuda_id'       => !empty($json->deuda_id) ? (int) $json->deuda_id : null,
+                'tarjeta_id'     => !empty($json->tarjeta_id) ? (int) $json->tarjeta_id : null,
                 'monto_estimado' => (float) ($json->monto_estimado ?? 0),
                 'activa'         => 1,
             ];
@@ -141,6 +146,9 @@ class GastosFijosController extends ResourceController
             if (isset($json->activa))         $data['activa']         = (int) $json->activa;
             if (property_exists($json, 'deuda_id')) {
                 $data['deuda_id'] = !empty($json->deuda_id) ? (int) $json->deuda_id : null;
+            }
+            if (property_exists($json, 'tarjeta_id')) {
+                $data['tarjeta_id'] = !empty($json->tarjeta_id) ? (int) $json->tarjeta_id : null;
             }
 
             $this->plantillasModel->update($plantillaId, $data);
@@ -206,6 +214,7 @@ class GastosFijosController extends ResourceController
                 ->select('gastos_pendientes.gasto_id,
                           gastos_pendientes.plantilla_id,
                           gastos_pendientes.deuda_id,
+                          gastos_pendientes.tarjeta_id,
                           gastos_pendientes.nombre,
                           gastos_pendientes.descripcion,
                           gastos_pendientes.monto,
@@ -220,10 +229,11 @@ class GastosFijosController extends ResourceController
                           deudas.cuota_mensual,
                           deudas.saldo_pendiente AS deuda_saldo_pendiente,
                           deudas.estado AS deuda_estado,
-                          deudas.tarjeta_id,
-                          tarjetas_credito.nombre AS tarjeta_nombre')
+                          COALESCE(gastos_pendientes.tarjeta_id, deudas.tarjeta_id) AS tarjeta_vinculada_id,
+                          COALESCE(tarjetas_directas.nombre, tarjetas_credito.nombre) AS tarjeta_nombre')
                 ->join('categorias', 'categorias.categoria_id = gastos_pendientes.categoria_id', 'left')
                 ->join('deudas', 'deudas.deuda_id = gastos_pendientes.deuda_id', 'left')
+                ->join('tarjetas_credito AS tarjetas_directas', 'tarjetas_directas.tarjeta_id = gastos_pendientes.tarjeta_id', 'left')
                 ->join('tarjetas_credito', 'tarjetas_credito.tarjeta_id = deudas.tarjeta_id', 'left')
                 ->where('gastos_pendientes.usuario_id', $usuarioId)
                 ->where('gastos_pendientes.mes', $mes)
@@ -312,6 +322,7 @@ class GastosFijosController extends ResourceController
                     'usuario_id'   => $usuarioId,
                     'plantilla_id' => $p['plantilla_id'],
                     'deuda_id'     => !empty($p['deuda_id']) ? $p['deuda_id'] : null,
+                    'tarjeta_id'   => !empty($p['tarjeta_id']) ? $p['tarjeta_id'] : null,
                     'nombre'       => $p['nombre'],
                     'descripcion'  => $p['descripcion'],
                     'categoria_id' => $p['categoria_id'],
@@ -349,14 +360,48 @@ class GastosFijosController extends ResourceController
         }
 
         try {
+            $tarjetaId = !empty($json->tarjeta_id) ? (int) $json->tarjeta_id : null;
+            $monto     = isset($json->monto) && $json->monto > 0 ? (float) $json->monto : null;
+
+            $this->db->transStart();
+
+            // Si es un nuevo consumo corriente con tarjeta (no una cuota de deuda/tasa 0 ya registrada), registrar el consumo en la tarjeta
+            if ($tarjetaId && $monto > 0 && empty($json->deuda_id)) {
+                $tarjeta = $this->tarjetasModel->find($tarjetaId);
+                if ($tarjeta && $tarjeta['usuario_id'] == $usuarioId) {
+                    $nuevoDisponible = max(0, (float) $tarjeta['saldo_disponible'] - $monto);
+                    $nuevoUtilizado  = (float) $tarjeta['saldo_utilizado'] + $monto;
+
+                    $this->tarjetasModel->update($tarjetaId, [
+                        'saldo_disponible' => $nuevoDisponible,
+                        'saldo_utilizado'  => $nuevoUtilizado,
+                    ]);
+
+                    // Registrar transacción de compra con tarjeta en historial de tarjeta
+                    $this->transaccionesModel->insert([
+                        'usuario_id'    => $usuarioId,
+                        'fecha'         => date('Y-m-d'),
+                        'tipo'          => 'Egreso',
+                        'monto'         => $monto,
+                        'estado'        => 'pagado',
+                        'saldo_despues' => null, // Crédito, no debita cuenta corriente
+                        'descripcion'   => $json->nombre . ($json->descripcion ? ' — ' . $json->descripcion : ''),
+                        'categoria_id'  => $json->categoria_id,
+                        'deuda_id'      => null,
+                        'tarjeta_id'    => $tarjetaId,
+                    ]);
+                }
+            }
+
             $data = [
                 'usuario_id'   => $usuarioId,
                 'plantilla_id' => null,
                 'deuda_id'     => !empty($json->deuda_id) ? (int) $json->deuda_id : null,
+                'tarjeta_id'   => $tarjetaId,
                 'nombre'       => $json->nombre,
                 'descripcion'  => $json->descripcion ?? null,
                 'categoria_id' => $json->categoria_id,
-                'monto'        => isset($json->monto) && $json->monto > 0 ? (float) $json->monto : null,
+                'monto'        => $monto,
                 'mes'          => (int) ($json->mes  ?? date('n')),
                 'anio'         => (int) ($json->anio ?? date('Y')),
                 'estado'       => 'pendiente',
@@ -364,11 +409,18 @@ class GastosFijosController extends ResourceController
 
             $this->pendientesModel->insert($data);
 
+            $this->db->transComplete();
+
+            if ($this->db->transStatus() === false) {
+                return $this->failServerError('Error al crear el gasto pendiente');
+            }
+
             return $this->respondCreated([
                 'status'  => 201,
                 'message' => 'Gasto pendiente creado correctamente',
             ]);
         } catch (\Exception $e) {
+            $this->db->transRollback();
             return $this->failServerError($e->getMessage());
         }
     }
@@ -446,7 +498,7 @@ class GastosFijosController extends ResourceController
 
             // Manejo de deuda y tarjeta asociada
             $deudaId   = !empty($gasto['deuda_id']) ? (int) $gasto['deuda_id'] : null;
-            $tarjetaId = null;
+            $tarjetaId = !empty($gasto['tarjeta_id']) ? (int) $gasto['tarjeta_id'] : null;
 
             if ($deudaId) {
                 $deuda = $this->deudasModel->find($deudaId);
@@ -462,17 +514,21 @@ class GastosFijosController extends ResourceController
                     // Si la deuda proviene de una tarjeta de crédito (ej. Tasa 0)
                     if (!empty($deuda['tarjeta_id'])) {
                         $tarjetaId = (int) $deuda['tarjeta_id'];
-                        $tarjeta = $this->tarjetasModel->find($tarjetaId);
-                        if ($tarjeta) {
-                            $nuevoUtilizado  = max(0, (float) $tarjeta['saldo_utilizado'] - $monto);
-                            $nuevoDisponible = min((float) $tarjeta['limite_credito'], (float) $tarjeta['saldo_disponible'] + $monto);
-
-                            $this->tarjetasModel->update($tarjetaId, [
-                                'saldo_disponible' => $nuevoDisponible,
-                                'saldo_utilizado'  => $nuevoUtilizado,
-                            ]);
-                        }
                     }
+                }
+            }
+
+            // Si hay tarjeta vinculada (directa o via deuda), reponer/liberar saldo en la tarjeta
+            if ($tarjetaId) {
+                $tarjeta = $this->tarjetasModel->find($tarjetaId);
+                if ($tarjeta) {
+                    $nuevoUtilizado  = max(0, (float) $tarjeta['saldo_utilizado'] - $monto);
+                    $nuevoDisponible = min((float) $tarjeta['limite_credito'], (float) $tarjeta['saldo_disponible'] + $monto);
+
+                    $this->tarjetasModel->update($tarjetaId, [
+                        'saldo_disponible' => $nuevoDisponible,
+                        'saldo_utilizado'  => $nuevoUtilizado,
+                    ]);
                 }
             }
 
@@ -540,13 +596,37 @@ class GastosFijosController extends ResourceController
         }
 
         try {
+            $this->db->transStart();
+
+            // Si estaba vinculado directamente a una tarjeta y no se pagó, revertir el saldo consumido
+            if (!empty($gasto['tarjeta_id']) && !empty($gasto['monto'])) {
+                $tarjeta = $this->tarjetasModel->find($gasto['tarjeta_id']);
+                if ($tarjeta) {
+                    $monto = (float) $gasto['monto'];
+                    $nuevoUtilizado  = max(0, (float) $tarjeta['saldo_utilizado'] - $monto);
+                    $nuevoDisponible = min((float) $tarjeta['limite_credito'], (float) $tarjeta['saldo_disponible'] + $monto);
+
+                    $this->tarjetasModel->update($gasto['tarjeta_id'], [
+                        'saldo_disponible' => $nuevoDisponible,
+                        'saldo_utilizado'  => $nuevoUtilizado,
+                    ]);
+                }
+            }
+
             $this->pendientesModel->delete($gastoId);
+
+            $this->db->transComplete();
+
+            if ($this->db->transStatus() === false) {
+                return $this->failServerError('Error al eliminar el gasto');
+            }
 
             return $this->respond([
                 'status'  => 200,
                 'message' => 'Gasto eliminado correctamente',
             ]);
         } catch (\Exception $e) {
+            $this->db->transRollback();
             return $this->failServerError($e->getMessage());
         }
     }

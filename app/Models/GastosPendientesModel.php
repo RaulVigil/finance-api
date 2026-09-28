@@ -16,6 +16,7 @@ class GastosPendientesModel extends Model
         'descripcion',
         'categoria_id',
         'deuda_id',
+        'tarjeta_id',
         'monto',
         'mes',
         'anio',

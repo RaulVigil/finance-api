@@ -30,6 +30,8 @@ $routes->group('api', ['filter' => \App\Filters\AuthFilter::class,], function ($
   $routes->get('transacciones-todas', 'TransaccionesController::allTransacciones');
   $routes->get('deudas-detalle', 'TransaccionesController::deudasDetalle');
   $routes->post('deudas-crear', 'TransaccionesController::createDeuda');
+  $routes->put('deudas/(:num)', 'TransaccionesController::actualizarDeuda/$1');
+  $routes->delete('deudas/(:num)', 'TransaccionesController::eliminarDeuda/$1');
   $routes->get('datos-graficas', 'TransaccionesController::getDatosGraficas');
 
   // ── Gastos Fijos ──────────────────────────────────────────
@@ -52,6 +54,7 @@ $routes->group('api', ['filter' => \App\Filters\AuthFilter::class,], function ($
   $routes->post('tarjetas/(:num)/gasto',               'TarjetasController::registrarGasto/$1');
   $routes->post('tarjetas/(:num)/pagar',               'TarjetasController::pagarTarjeta/$1');
   $routes->post('tarjetas/(:num)/cuota',               'TarjetasController::registrarCuota/$1');
+  $routes->delete('tarjetas/(:num)',                   'TarjetasController::eliminar/$1');
 });
 
 $routes->get("multimedia/(:any)", 'MultimediaController::index/$0');
