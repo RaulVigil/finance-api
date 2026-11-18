@@ -69,7 +69,7 @@ class Cors implements FilterInterface
             // 3. Manejo de la solicitud OPTIONS (Preflight)
             if ($method === 'options') {
                 // Establece las cabeceras para el preflight
-                $response->setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+                $response->setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
                 $response->setHeader('Access-Control-Allow-Headers', 'X-API-KEY, X-Requested-With, Content-Type, Accept, Authorization');
                 $response->setHeader('Access-Control-Max-Age', '3600');
 

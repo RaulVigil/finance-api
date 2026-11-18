@@ -1,0 +1,15 @@
+.git
+.gitignore
+.vscode
+.env
+vendor/
+node_modules/
+writable/cache/*
+writable/logs/*
+writable/session/*
+writable/debugbar/*
+tests/
+*.zip
+*.sql
+*.log
+add_tarjeta_to_gastos.php
